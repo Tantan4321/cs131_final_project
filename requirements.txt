@@ -1,0 +1,14 @@
+torch>=2.0
+torchvision
+segmentation-models-pytorch>=0.3.3
+albumentations>=1.3
+opencv-python-headless
+rasterio>=1.3
+shapely>=2.0
+scipy
+numpy
+matplotlib
+pandas
+tqdm
+scikit-learn
+Pillow
