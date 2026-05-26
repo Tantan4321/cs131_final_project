@@ -1,3 +1,4 @@
 train/**/*.png filter=lfs diff=lfs merge=lfs -text
 train/**/*.npy filter=lfs diff=lfs merge=lfs -text
+outputs/checkpoints/*.pt filter=lfs diff=lfs merge=lfs -text
 *.pt filter=lfs diff=lfs merge=lfs -text
