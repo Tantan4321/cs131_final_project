@@ -56,21 +56,28 @@ def macro_f1(pred, target, num_classes=5, eps=1e-7):
     return float(np.mean(f1s)), f1s
 
 
-def compute_class_weights():
+def compute_class_weights(scheme="inv-freq"):
+    if scheme == "none":
+        w = torch.ones(5)
+        print(f"Class weights ({scheme}): {dict(zip(DAMAGE_NAMES, w.tolist()))}")
+        return w
     csv = OUTPUTS / "dataset_stats.csv"
-    weights = torch.ones(5)
     if not csv.exists():
         print(f"[warn] {csv} not found -> using uniform class weights. "
               f"Run `python -m src.tools.dataset_stats` first for inverse-freq weights.")
-        return weights
+        return torch.ones(5)
     df = pd.read_csv(csv)
     totals = df.groupby("subtype")["pixel_area"].sum().to_dict()
-    # background pixels are ~everything; assign weight 1.0 for bg, inverse-freq for damage classes
     name_to_cls = {"no-damage": 1, "minor-damage": 2, "major-damage": 3, "destroyed": 4}
     freqs = np.array([totals.get(n, 1.0) for n in name_to_cls])
-    inv = freqs.max() / np.clip(freqs, 1.0, None)
+    if scheme == "inv-freq":
+        inv = freqs.max() / np.clip(freqs, 1.0, None)
+    elif scheme == "inv-sqrt-freq":
+        inv = np.sqrt(freqs.max() / np.clip(freqs, 1.0, None))
+    else:
+        raise ValueError(f"Unknown weights scheme: {scheme}")
     weights = torch.tensor([1.0, *inv.tolist()], dtype=torch.float32)
-    print(f"Class weights: {dict(zip(DAMAGE_NAMES, weights.tolist()))}")
+    print(f"Class weights ({scheme}): {dict(zip(DAMAGE_NAMES, weights.tolist()))}")
     return weights
 
 
@@ -135,14 +142,20 @@ def main():
     ap.add_argument("--num-workers", type=int, default=2)
     ap.add_argument("--stage1-ckpt", type=str, default=str(CHECKPOINTS / "loc.pt"))
     ap.add_argument("--gamma", type=float, default=2.0)
+    ap.add_argument("--weights", choices=["inv-freq", "inv-sqrt-freq", "none"], default="inv-freq",
+                    help="class-weight scheme for the CE term")
+    ap.add_argument("--encoder", default="resnet34",
+                    help="smp encoder name (resnet34, resnet50, efficientnet-b0, ...)")
+    ap.add_argument("--run-name", default="",
+                    help="suffix appended to checkpoint/log/figure filenames so sweeps don't overwrite each other")
     ap.add_argument("--limit-train", type=int, default=None)
     ap.add_argument("--resume", action="store_true",
-                    help="resume from outputs/checkpoints/dmg_last.pt if present")
+                    help="resume from outputs/checkpoints/dmg{_run-name}_last.pt if present")
     args = ap.parse_args()
 
     ensure_dirs()
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Device: {device}")
+    print(f"Device: {device}  |  run-name='{args.run_name or '(default)'}'")
 
     all_pairs = list_pairs()
     train_pairs, val_pairs = split_pairs(all_pairs)
@@ -157,17 +170,19 @@ def main():
     dl_val = DataLoader(ds_val, batch_size=args.batch_size, shuffle=False,
                         num_workers=args.num_workers, pin_memory=True)
 
-    model = SiameseUNet(classes=5).to(device)
-    weights = compute_class_weights().to(device)
+    model = SiameseUNet(encoder_name=args.encoder, classes=5).to(device)
+    weights = compute_class_weights(args.weights).to(device)
     loss_fn = FocalCE(weight=weights, gamma=args.gamma).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     history = {"train": [], "val": []}
     best_f1 = -1.0
     start_epoch = 1
-    log_path = LOGS / "train_dmg.json"
-    best_ckpt = CHECKPOINTS / "dmg.pt"
-    last_ckpt = CHECKPOINTS / "dmg_last.pt"
+    suffix = f"_{args.run_name}" if args.run_name else ""
+    log_path = LOGS / f"train_dmg{suffix}.json"
+    best_ckpt = CHECKPOINTS / f"dmg{suffix}.pt"
+    last_ckpt = CHECKPOINTS / f"dmg{suffix}_last.pt"
+    curves_path = FIGS / f"dmg{suffix}_training_curves.png"
 
     if args.resume and last_ckpt.exists():
         state = torch.load(last_ckpt, map_location=device, weights_only=False)
@@ -179,12 +194,14 @@ def main():
         print(f"Resumed from {last_ckpt}: completed epoch {state['epoch']}, best val macroF1 so far={best_f1:.4f}")
         if start_epoch > args.epochs:
             print(f"Nothing to do: already trained {state['epoch']}/{args.epochs} epochs.")
-            plot_curves(history, FIGS / "dmg_training_curves.png")
+            plot_curves(history, curves_path)
             return
     else:
         if args.resume:
             print(f"--resume requested but {last_ckpt} not found; starting from scratch.")
-        if Path(args.stage1_ckpt).exists():
+        if args.encoder != "resnet34":
+            print(f"[info] Encoder is {args.encoder}; skipping Stage-1 warm-start (checkpoint is resnet34).")
+        elif Path(args.stage1_ckpt).exists():
             model.load_stage1_encoder(args.stage1_ckpt)
         else:
             print(f"[warn] Stage-1 checkpoint not found at {args.stage1_ckpt}; using ImageNet-only init.")
@@ -216,7 +233,7 @@ def main():
         }, last_ckpt)
 
     print(f"\nTotal training time: {(time.time() - t0)/60:.1f} min  |  best val macro F1 = {best_f1:.4f}")
-    plot_curves(history, FIGS / "dmg_training_curves.png")
+    plot_curves(history, curves_path)
 
 
 if __name__ == "__main__":
