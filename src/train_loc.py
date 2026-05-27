@@ -138,7 +138,7 @@ def main():
     last_ckpt = CHECKPOINTS / "loc_last.pt"
 
     if args.resume and last_ckpt.exists():
-        state = torch.load(last_ckpt, map_location=device)
+        state = torch.load(last_ckpt, map_location=device, weights_only=False)
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         history = state["history"]

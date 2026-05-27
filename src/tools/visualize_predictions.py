@@ -36,19 +36,24 @@ def main():
     ap.add_argument("--ckpt", default=str(CHECKPOINTS / "loc.pt"))
     ap.add_argument("--n", type=int, default=4)
     ap.add_argument("--crop", type=int, default=512)
+    ap.add_argument("--skip", type=int, nargs="*", default=[],
+                    help="indices (0-based, into the held-out val pair list) to exclude")
     args = ap.parse_args()
 
     ensure_dirs()
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = make_model().to(device)
-    ckpt = torch.load(args.ckpt, map_location=device)
+    ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model"])
     model.eval()
     print(f"Loaded {args.ckpt} (epoch={ckpt.get('epoch')} val_f1={ckpt.get('val_f1'):.4f})")
 
     _, val_pairs = split_pairs(list_pairs())
-    val_pairs = val_pairs[: args.n]
+    skipped = set(args.skip)
+    val_pairs = [p for i, p in enumerate(val_pairs) if i not in skipped][: args.n]
+    if skipped:
+        print(f"Skipped val indices: {sorted(skipped)}")
     print(f"Inference on {len(val_pairs)} tiles from held-out disaster: {HOLDOUT_DISASTER}")
 
     ds = XBDDataset(val_pairs, stage="loc", crop=args.crop, train=False)

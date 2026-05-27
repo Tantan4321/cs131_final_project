@@ -130,35 +130,43 @@ def main():
             ix, iy = 400, 400
     iw = args.inset_size
 
-    fig = plt.figure(figsize=(16, 8))
-    gs = fig.add_gridspec(2, 4, height_ratios=[3, 1.4], hspace=0.18, wspace=0.06)
+    fig = plt.figure(figsize=(16, 8.8))
+    gs = fig.add_gridspec(2, 4, height_ratios=[3, 1.3], hspace=0.18, wspace=0.04)
 
-    ax0 = fig.add_subplot(gs[0, 0]); ax0.imshow(img); ax0.set_title(f"PRE  ({disaster}/{image_id})", fontsize=10); ax0.axis("off")
+    title_kw = dict(fontsize=12, pad=4)
+    zoom_kw = dict(fontsize=11, pad=4)
+
+    ax0 = fig.add_subplot(gs[0, 0]); ax0.imshow(img)
+    ax0.set_title("Pre-disaster", **title_kw); ax0.axis("off")
     ax1 = fig.add_subplot(gs[0, 1]); ax1.imshow(img); ax1.imshow(base_rgb, alpha=0.55)
-    ax1.set_title("Baseline: binary mask, shrink polygons by 2px\n(loses footprint; fails when buildings <4px apart)", fontsize=10); ax1.axis("off")
+    ax1.set_title("Shrink-2px mask", **title_kw); ax1.axis("off")
     ax2 = fig.add_subplot(gs[0, 2]); ax2.imshow(img); ax2.imshow(our_rgb, alpha=0.55)
-    ax2.set_title("Ours: 3-class encoding\n(green=interior, red=learned boundary band)", fontsize=10); ax2.axis("off")
+    ax2.set_title("3-class encoding", **title_kw); ax2.axis("off")
     ax3 = fig.add_subplot(gs[0, 3]); ax3.imshow(our_rgb)
-    ax3.set_title("Ours: raw target the network learns", fontsize=10); ax3.axis("off")
+    ax3.set_title("3-class target", **title_kw); ax3.axis("off")
 
     for ax in (ax1, ax2):
         ax.add_patch(Rectangle((ix, iy), iw, iw, fill=False, edgecolor="yellow", linewidth=2))
 
-    axz0 = fig.add_subplot(gs[1, 0]); axz0.imshow(img[iy:iy+iw, ix:ix+iw]); axz0.set_title("zoom: PRE", fontsize=9); axz0.set_xticks([]); axz0.set_yticks([])
+    axz0 = fig.add_subplot(gs[1, 0]); axz0.imshow(img[iy:iy+iw, ix:ix+iw])
+    axz0.set_title("inset: pre", **zoom_kw); axz0.set_xticks([]); axz0.set_yticks([])
     axz1 = fig.add_subplot(gs[1, 1])
     axz1.imshow(img[iy:iy+iw, ix:ix+iw]); axz1.imshow(base_rgb[iy:iy+iw, ix:ix+iw], alpha=0.55)
-    axz1.set_title("zoom: baseline mask", fontsize=9); axz1.set_xticks([]); axz1.set_yticks([])
+    axz1.set_title("inset: shrink-2px", **zoom_kw); axz1.set_xticks([]); axz1.set_yticks([])
     axz2 = fig.add_subplot(gs[1, 2])
     axz2.imshow(img[iy:iy+iw, ix:ix+iw]); axz2.imshow(our_rgb[iy:iy+iw, ix:ix+iw], alpha=0.55)
-    axz2.set_title("zoom: ours (boundary band separates adjacent buildings)", fontsize=9); axz2.set_xticks([]); axz2.set_yticks([])
-    axz3 = fig.add_subplot(gs[1, 3]); axz3.imshow(our_rgb[iy:iy+iw, ix:ix+iw]); axz3.set_title("zoom: raw target", fontsize=9); axz3.set_xticks([]); axz3.set_yticks([])
+    axz2.set_title("inset: 3-class", **zoom_kw); axz2.set_xticks([]); axz2.set_yticks([])
+    axz3 = fig.add_subplot(gs[1, 3]); axz3.imshow(our_rgb[iy:iy+iw, ix:ix+iw])
+    axz3.set_title("inset: target", **zoom_kw); axz3.set_xticks([]); axz3.set_yticks([])
 
-    base_fg = (base_mask > 0).sum()
-    our_fg = (our_mask >= 1).sum()
+    base_fg = int((base_mask > 0).sum())
+    our_fg = int((our_mask >= 1).sum())
+    gain_pct = 100 * (our_fg - base_fg) / max(base_fg, 1)
     fig.suptitle(
-        f"Polygon -> mask encoding: baseline shrink-2px vs. ours   "
-        f"baseline foreground px: {base_fg:,}   |   ours interior+boundary px: {our_fg:,}",
-        fontsize=12,
+        f"Tile: {disaster}/{image_id}    ·    "
+        f"foreground px: shrink-2px {base_fg:,}  vs.  3-class {our_fg:,}  "
+        f"({gain_pct:+.0f}%)",
+        fontsize=12, y=0.995,
     )
     out = FIGS / "encoding_compare.png"
     fig.savefig(out, dpi=140, bbox_inches="tight")

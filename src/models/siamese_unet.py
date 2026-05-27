@@ -33,15 +33,23 @@ class SiameseUNet(nn.Module):
         f_pre = self.encoder(pre)
         f_post = self.encoder(post)
         fused = [fuse(torch.cat([a, b], dim=1)) for fuse, a, b in zip(self.fusers, f_pre, f_post)]
-        decoded = self.decoder(*fused)
+        # smp >=0.4 expects the feature list as a single arg; older versions wanted *fused
+        try:
+            decoded = self.decoder(fused)
+        except TypeError:
+            decoded = self.decoder(*fused)
         return self.segmentation_head(decoded)
 
     def load_stage1_encoder(self, checkpoint_path):
-        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         sd = ckpt.get("model", ckpt)
         enc_sd = {k[len("encoder."):]: v for k, v in sd.items() if k.startswith("encoder.")}
-        missing, unexpected = self.encoder.load_state_dict(enc_sd, strict=False)
-        print(
-            f"Loaded Stage-1 encoder weights: {len(enc_sd)} tensors "
-            f"(missing={len(missing)}, unexpected={len(unexpected)})"
-        )
+        result = self.encoder.load_state_dict(enc_sd, strict=False)
+        if result is not None:
+            missing, unexpected = result
+            print(
+                f"Loaded Stage-1 encoder weights: {len(enc_sd)} tensors "
+                f"(missing={len(missing)}, unexpected={len(unexpected)})"
+            )
+        else:
+            print(f"Loaded Stage-1 encoder weights: {len(enc_sd)} tensors")
