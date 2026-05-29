@@ -5,6 +5,7 @@ loss with inverse-frequency class weights derived from outputs/dataset_stats.csv
 """
 import argparse
 import json
+import random
 import time
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.data.xbd_dataset import XBDDataset, list_pairs, split_pairs
+from src.data.xbd_dataset import XBDDataset, list_pairs, make_balanced_sampler, split_pairs
 from src.models.siamese_unet import SiameseUNet
 from src.paths import (
     CHECKPOINTS,
@@ -117,16 +118,24 @@ def run_epoch(model, loader, device, optimizer, loss_fn, train):
 
 def plot_curves(history, out_path):
     import matplotlib.pyplot as plt
+    CLASS_NAMES = ["no-damage", "minor", "major", "destroyed"]
+    CLASS_COLORS = ["#2ca02c", "#ffd54f", "#ff7f0e", "#d62728"]
     epochs = list(range(1, len(history["train"]) + 1))
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4))
     axes[0].plot(epochs, [h["loss"] for h in history["train"]], "-o", label="train")
     axes[0].plot(epochs, [h["loss"] for h in history["val"]], "-s", label="val")
     axes[0].set_title("Damage loss (weighted CE + focal)")
     axes[0].set_xlabel("epoch"); axes[0].grid(alpha=0.3); axes[0].legend()
-    axes[1].plot(epochs, [h["macro_f1"] for h in history["train"]], "-o", label="train")
-    axes[1].plot(epochs, [h["macro_f1"] for h in history["val"]], "-s", label="val")
-    axes[1].set_title("Macro F1 (4 damage classes)")
-    axes[1].set_xlabel("epoch"); axes[1].grid(alpha=0.3); axes[1].legend()
+    for i, (name, color) in enumerate(zip(CLASS_NAMES, CLASS_COLORS)):
+        axes[1].plot(epochs, [h["per_class_f1"][i] for h in history["train"]],
+                     "-o", label=name, color=color)
+    axes[1].set_title("Train F1 (per class)")
+    axes[1].set_xlabel("epoch"); axes[1].set_ylim(0, 1); axes[1].grid(alpha=0.3); axes[1].legend(fontsize=8)
+    for i, (name, color) in enumerate(zip(CLASS_NAMES, CLASS_COLORS)):
+        axes[2].plot(epochs, [h["per_class_f1"][i] for h in history["val"]],
+                     "-s", label=name, color=color)
+    axes[2].set_title("Val F1 (per class)")
+    axes[2].set_xlabel("epoch"); axes[2].set_ylim(0, 1); axes[2].grid(alpha=0.3); axes[2].legend(fontsize=8)
     fig.suptitle(f"Stage 2: Siamese U-Net damage head (val = held-out {HOLDOUT_DISASTER})", fontsize=12)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -151,11 +160,22 @@ def main():
     ap.add_argument("--limit-train", type=int, default=None)
     ap.add_argument("--resume", action="store_true",
                     help="resume from outputs/checkpoints/dmg{_run-name}_last.pt if present")
+    ap.add_argument("--seed", type=int, default=131,
+                    help="seed for Python/NumPy/Torch RNGs and the WeightedRandomSampler")
+    ap.add_argument("--stratified", action=argparse.BooleanOptionalAction, default=True,
+                    help="use a WeightedRandomSampler that balances expected per-class "
+                         "pixel count across batches (--no-stratified disables)")
     args = ap.parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     ensure_dirs()
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Device: {device}  |  run-name='{args.run_name or '(default)'}'")
+    print(f"Device: {device}  |  run-name='{args.run_name or '(default)'}'  |  seed={args.seed}  |  stratified={args.stratified}")
 
     all_pairs = list_pairs()
     train_pairs, val_pairs = split_pairs(all_pairs)
@@ -165,8 +185,17 @@ def main():
 
     ds_train = XBDDataset(train_pairs, stage="dmg", crop=args.crop, train=True)
     ds_val = XBDDataset(val_pairs, stage="dmg", crop=args.crop, train=False)
-    dl_train = DataLoader(ds_train, batch_size=args.batch_size, shuffle=True,
-                          num_workers=args.num_workers, pin_memory=True, drop_last=True)
+    if args.stratified:
+        gen = torch.Generator().manual_seed(args.seed)
+        sampler = make_balanced_sampler(
+            train_pairs, generator=gen,
+            cache_file=str(OUTPUTS / "stratified_weights.pt"),
+        )
+        dl_train = DataLoader(ds_train, batch_size=args.batch_size, sampler=sampler,
+                              num_workers=args.num_workers, pin_memory=True, drop_last=True)
+    else:
+        dl_train = DataLoader(ds_train, batch_size=args.batch_size, shuffle=True,
+                              num_workers=args.num_workers, pin_memory=True, drop_last=True)
     dl_val = DataLoader(ds_val, batch_size=args.batch_size, shuffle=False,
                         num_workers=args.num_workers, pin_memory=True)
 
