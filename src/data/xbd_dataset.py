@@ -93,7 +93,7 @@ def compute_tile_weights(pairs, dmg_classes=DMG_CLASSES, cache_file=None, verbos
         mask_path = CACHE_DMG / disaster / f"{image_id}_post_disaster.npy"
         if not mask_path.exists():
             continue
-        mask = np.load(mask_path)
+        mask = np.load(mask_path, allow_pickle=True)
         for c in dmg_classes:
             per_tile[i, c] = int((mask == c).sum())
 
@@ -156,7 +156,7 @@ class XBDDataset(Dataset):
         p = root / disaster / f"{image_id}_{suffix}.npy"
         if not p.exists():
             return np.zeros((1024, 1024), dtype=np.uint8)
-        return np.load(p).astype(np.uint8)
+        return np.load(p, allow_pickle=True).astype(np.uint8)
 
     def __getitem__(self, idx):
         disaster, image_id = self.pairs[idx]
