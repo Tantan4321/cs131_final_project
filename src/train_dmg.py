@@ -17,15 +17,15 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.data.xbd_dataset import XBDDataset, list_pairs, make_balanced_sampler, split_pairs
+from src.data.xbd_dataset import XBDDataset, list_pairs, list_test_pairs, make_balanced_sampler
 from src.models.siamese_unet import SiameseUNet
 from src.paths import (
     CHECKPOINTS,
     DAMAGE_NAMES,
     FIGS,
-    HOLDOUT_DISASTER,
     LOGS,
     OUTPUTS,
+    TEST_ROOT,
     ensure_dirs,
 )
 
@@ -136,7 +136,7 @@ def plot_curves(history, out_path):
                      "-s", label=name, color=color)
     axes[2].set_title("Val F1 (per class)")
     axes[2].set_xlabel("epoch"); axes[2].set_ylim(0, 1); axes[2].grid(alpha=0.3); axes[2].legend(fontsize=8)
-    fig.suptitle(f"Stage 2: Siamese U-Net damage head (val = held-out {HOLDOUT_DISASTER})", fontsize=12)
+    fig.suptitle("Stage 2: Siamese U-Net damage head (val = xBD test split)", fontsize=12)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     print(f"Wrote {out_path}")
@@ -177,14 +177,14 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}  |  run-name='{args.run_name or '(default)'}'  |  seed={args.seed}  |  stratified={args.stratified}")
 
-    all_pairs = list_pairs()
-    train_pairs, val_pairs = split_pairs(all_pairs)
+    train_pairs = list_pairs()           # all 2799 train tiles
+    val_pairs = list_test_pairs()        # official 933-pair test split
     if args.limit_train:
         train_pairs = train_pairs[: args.limit_train]
-    print(f"train={len(train_pairs)} pairs, val={len(val_pairs)} pairs (holdout={HOLDOUT_DISASTER})")
+    print(f"train={len(train_pairs)} pairs, val(test)={len(val_pairs)} pairs")
 
     ds_train = XBDDataset(train_pairs, stage="dmg", crop=args.crop, train=True)
-    ds_val = XBDDataset(val_pairs, stage="dmg", crop=args.crop, train=False)
+    ds_val = XBDDataset(val_pairs, stage="dmg", crop=args.crop, train=False, data_root=TEST_ROOT)
     if args.stratified:
         gen = torch.Generator().manual_seed(args.seed)
         sampler = make_balanced_sampler(

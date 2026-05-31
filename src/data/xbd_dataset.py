@@ -11,7 +11,10 @@ from albumentations.pytorch import ToTensorV2
 from torch.utils.data import Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
-from src.paths import CACHE_DMG, CACHE_LOC, HOLDOUT_DISASTER, OUTPUTS, XBD
+from src.paths import (
+    CACHE_DMG, CACHE_DMG_TEST, CACHE_LOC,
+    DATASET, DISASTERS, OUTPUTS, TEST_ROOT, XBD, XBD_TEST,
+)
 
 DMG_CLASSES = (1, 2, 3, 4)   # no-damage, minor, major, destroyed (0 = bg)
 
@@ -19,10 +22,14 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
-def list_pairs():
-    """Return list of (disaster, image_id) tuples for the train set."""
+def list_pairs(xbd_root=None):
+    """Return (disaster, image_id) tuples from the per-disaster xBD layout.
+
+    Defaults to the training set (train/xBD/). Pass xbd_root=XBD_TEST for test.
+    """
+    root = Path(xbd_root) if xbd_root else XBD
     pairs = []
-    for disaster_dir in sorted(XBD.iterdir()):
+    for disaster_dir in sorted(root.iterdir()):
         if not disaster_dir.is_dir():
             continue
         img_dir = disaster_dir / "images"
@@ -32,7 +39,13 @@ def list_pairs():
     return pairs
 
 
-def split_pairs(pairs, holdout=HOLDOUT_DISASTER):
+def list_test_pairs():
+    """Return (disaster, image_id) tuples for the official xBD test split."""
+    return list_pairs(xbd_root=XBD_TEST)
+
+
+def split_pairs(pairs, holdout="santa-rosa-wildfire"):
+    """Split pairs into (train, val) by held-out disaster. Kept for backward compat."""
     train = [p for p in pairs if p[0] != holdout]
     val = [p for p in pairs if p[0] == holdout]
     return train, val
@@ -70,7 +83,8 @@ def _augment(crop, train):
     )
 
 
-def compute_tile_weights(pairs, dmg_classes=DMG_CLASSES, cache_file=None, verbose=True):
+def compute_tile_weights(pairs, dmg_classes=DMG_CLASSES, cache_file=None,
+                         verbose=True, cache_dmg_root=None):
     """Per-tile sampling weights for balanced damage-class exposure.
 
     For each tile, weight = sum_c (pixels_of_class_c_in_tile / total_pixels_of_class_c).
@@ -79,18 +93,20 @@ def compute_tile_weights(pairs, dmg_classes=DMG_CLASSES, cache_file=None, verbos
     almost all background. When used with WeightedRandomSampler the expected
     per-class pixel count in a batch becomes roughly equal across all
     damage classes -- no file duplication required.
-
-    The list of pairs is hashed into the cache filename so different splits
-    don't collide.
     """
+    cache_root = Path(cache_dmg_root) if cache_dmg_root else CACHE_DMG
+
     if cache_file and Path(cache_file).exists():
-        return torch.load(cache_file, weights_only=False)
+        cached = torch.load(cache_file, weights_only=False)
+        if len(cached) == len(pairs):
+            return cached
+        print(f"[tile weights] cache size {len(cached)} != {len(pairs)} pairs, recomputing")
 
     n_classes = max(dmg_classes) + 1
     per_tile = np.zeros((len(pairs), n_classes), dtype=np.float64)
     iterator = tqdm(pairs, desc="tile weights", disable=not verbose)
     for i, (disaster, image_id) in enumerate(iterator):
-        mask_path = CACHE_DMG / disaster / f"{image_id}_post_disaster.npy"
+        mask_path = cache_root / disaster / f"{image_id}_post_disaster.npy"
         if not mask_path.exists():
             continue
         mask = np.load(mask_path, allow_pickle=True)
@@ -113,7 +129,6 @@ def compute_tile_weights(pairs, dmg_classes=DMG_CLASSES, cache_file=None, verbos
         torch.save(weights_t, cache_file)
 
     if verbose:
-        # Sanity print: how concentrated is the sampler?
         wn = weights / weights.sum()
         top10 = np.argsort(wn)[-10:][::-1]
         bot_share = wn[wn.argsort()[: len(wn) // 2]].sum()
@@ -123,12 +138,7 @@ def compute_tile_weights(pairs, dmg_classes=DMG_CLASSES, cache_file=None, verbos
 
 
 def make_balanced_sampler(pairs, generator=None, cache_file=None):
-    """Drop-in WeightedRandomSampler for damage-class balancing.
-
-    Sampling is with replacement, num_samples = len(pairs) so one
-    "epoch" stays the same length as before. Some tiles get sampled
-    multiple times per epoch, some not at all -- that's the point.
-    """
+    """Drop-in WeightedRandomSampler for damage-class balancing."""
     weights = compute_tile_weights(pairs, cache_file=cache_file)
     return WeightedRandomSampler(
         weights=weights, num_samples=len(pairs), replacement=True, generator=generator
@@ -136,12 +146,20 @@ def make_balanced_sampler(pairs, generator=None, cache_file=None):
 
 
 class XBDDataset(Dataset):
-    def __init__(self, pairs, stage="loc", crop=512, train=True):
+    def __init__(self, pairs, stage="loc", crop=512, train=True, data_root=None):
+        """
+        data_root: root of the processed split (defaults to train/).
+                   Use TEST_ROOT for test-set inference.
+        """
         assert stage in ("loc", "dmg", "both")
         self.pairs = pairs
         self.stage = stage
         self.train = train
         self.tf = _augment(crop, train)
+        root = Path(data_root) if data_root else DATASET
+        self.xbd = root / "xBD"
+        self.cache_loc = root / "cache" / "loc"
+        self.cache_dmg = root / "cache" / "dmg"
 
     def __len__(self):
         return len(self.pairs)
@@ -160,16 +178,16 @@ class XBDDataset(Dataset):
 
     def __getitem__(self, idx):
         disaster, image_id = self.pairs[idx]
-        pre = self._load_img(XBD / disaster / "images" / f"{image_id}_pre_disaster.png")
+        pre = self._load_img(self.xbd / disaster / "images" / f"{image_id}_pre_disaster.png")
 
         kwargs = {"image": pre}
         if self.stage in ("dmg", "both"):
-            post = self._load_img(XBD / disaster / "images" / f"{image_id}_post_disaster.png")
+            post = self._load_img(self.xbd / disaster / "images" / f"{image_id}_post_disaster.png")
             kwargs["image_post"] = post
         if self.stage in ("loc", "both"):
-            kwargs["loc_mask"] = self._load_mask(CACHE_LOC, disaster, image_id, "pre_disaster")
+            kwargs["loc_mask"] = self._load_mask(self.cache_loc, disaster, image_id, "pre_disaster")
         if self.stage in ("dmg", "both"):
-            kwargs["dmg_mask"] = self._load_mask(CACHE_DMG, disaster, image_id, "post_disaster")
+            kwargs["dmg_mask"] = self._load_mask(self.cache_dmg, disaster, image_id, "post_disaster")
 
         out = self.tf(**kwargs)
         sample = {"pre": out["image"], "disaster": disaster, "image_id": image_id}

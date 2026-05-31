@@ -11,9 +11,9 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.xbd_dataset import XBDDataset, list_pairs, split_pairs
+from src.data.xbd_dataset import XBDDataset, list_test_pairs
 from src.models.siamese_unet import SiameseUNet
-from src.paths import CHECKPOINTS, DAMAGE_COLORS, DAMAGE_NAMES, FIGS, HOLDOUT_DISASTER, ensure_dirs
+from src.paths import CHECKPOINTS, DAMAGE_COLORS, DAMAGE_NAMES, FIGS, TEST_ROOT, ensure_dirs
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
 IMAGENET_STD = np.array([0.229, 0.224, 0.225])
@@ -63,18 +63,18 @@ def main():
     val_f1 = ckpt.get("val_macro_f1", 0.0)
     print(f"Loaded {args.ckpt} (epoch={ckpt.get('epoch')} val_macro_f1={val_f1:.4f})")
 
-    _, val_pairs = split_pairs(list_pairs())
+    all_test = list_test_pairs()
     skipped = set(args.skip)
-    val_pairs = [p for i, p in enumerate(val_pairs) if i not in skipped][: args.n]
+    selected = [p for i, p in enumerate(all_test) if i not in skipped][: args.n]
     if skipped:
-        print(f"Skipped val indices: {sorted(skipped)}")
-    print(f"Inference on {len(val_pairs)} tile pairs from held-out disaster: {HOLDOUT_DISASTER}")
+        print(f"Skipped test indices: {sorted(skipped)}")
+    print(f"Inference on {len(selected)} tile pairs from xBD test split")
 
-    ds = XBDDataset(val_pairs, stage="dmg", crop=args.crop, train=False)
+    ds = XBDDataset(selected, stage="dmg", crop=args.crop, train=False, data_root=TEST_ROOT)
     dl = DataLoader(ds, batch_size=1, shuffle=False)
 
-    fig, axes = plt.subplots(args.n, 5, figsize=(20, 4 * args.n))
-    if args.n == 1:
+    fig, axes = plt.subplots(len(selected), 5, figsize=(20, 4 * len(selected)))
+    if len(selected) == 1:
         axes = axes[None, :]
 
     for i, batch in enumerate(dl):
@@ -96,7 +96,7 @@ def main():
         axes[i, 3].imshow(pred_rgb); axes[i, 3].set_title("prediction (argmax)", fontsize=9); axes[i, 3].axis("off")
         axes[i, 4].imshow(post_img); axes[i, 4].imshow(pred_rgb, alpha=0.6); axes[i, 4].set_title("prediction on post", fontsize=9); axes[i, 4].axis("off")
 
-    fig.suptitle(f"Stage-2 Siamese U-Net damage predictions on held-out {HOLDOUT_DISASTER} "
+    fig.suptitle(f"Stage-2 Siamese U-Net damage predictions — xBD test split "
                  f"(val macro-F1={val_f1:.3f})", fontsize=12)
     add_legend(fig)
     fig.tight_layout()

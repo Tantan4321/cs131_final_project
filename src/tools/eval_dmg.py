@@ -17,9 +17,9 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.data.xbd_dataset import XBDDataset, list_pairs, split_pairs
+from src.data.xbd_dataset import XBDDataset, list_test_pairs
 from src.models.siamese_unet import SiameseUNet
-from src.paths import CHECKPOINTS, DAMAGE_COLORS, DAMAGE_NAMES, FIGS, HOLDOUT_DISASTER, LOGS, ensure_dirs
+from src.paths import CHECKPOINTS, DAMAGE_NAMES, FIGS, LOGS, TEST_ROOT, ensure_dirs
 
 EPS = 1e-7
 NUM_CLASSES = 5
@@ -55,7 +55,6 @@ def plot_confusion(cm, val_f1, out):
     row_sums = cm_sub.sum(axis=1, keepdims=True)
     cm_norm = cm_sub / (row_sums + EPS)
 
-    colors = [np.array(c) / 255.0 for c in DAMAGE_COLORS[1:]]
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(cm_norm, vmin=0, vmax=1, cmap="Blues")
     ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=10)
@@ -63,8 +62,8 @@ def plot_confusion(cm, val_f1, out):
     ax.set_xlabel("Predicted", fontsize=11)
     ax.set_ylabel("True", fontsize=11)
     ax.set_title(
-        f"Damage classification — val confusion matrix\n"
-        f"held-out: {HOLDOUT_DISASTER}   macro-F1 = {val_f1:.3f}",
+        f"Damage classification — test confusion matrix\n"
+        f"xBD test split (933 tiles)   macro-F1 = {val_f1:.3f}",
         fontsize=11,
     )
     for i in range(len(labels)):
@@ -99,9 +98,9 @@ def main():
     ckpt_f1 = state.get("val_macro_f1", 0.0)
     print(f"Loaded {args.ckpt}  encoder={encoder}  epoch={state.get('epoch')}  saved_val_f1={ckpt_f1:.4f}")
 
-    _, val_pairs = split_pairs(list_pairs())
-    print(f"Val tiles: {len(val_pairs)} ({HOLDOUT_DISASTER})")
-    ds = XBDDataset(val_pairs, stage="dmg", crop=args.crop, train=False)
+    val_pairs = list_test_pairs()
+    print(f"Test tiles: {len(val_pairs)}")
+    ds = XBDDataset(val_pairs, stage="dmg", crop=args.crop, train=False, data_root=TEST_ROOT)
     dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                     num_workers=args.num_workers, pin_memory=True)
 
