@@ -47,10 +47,15 @@ def add_legend(fig):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default=str(CHECKPOINTS / "dmg.pt"))
-    ap.add_argument("--n", type=int, default=4)
+    ap.add_argument("--n", type=int, default=4,
+                    help="number of tiles to show (ignored when --indices is set)")
     ap.add_argument("--crop", type=int, default=512)
     ap.add_argument("--skip", type=int, nargs="*", default=[],
-                    help="indices (0-based, into the held-out val pair list) to exclude")
+                    help="global test-list indices to exclude (when not using --indices)")
+    ap.add_argument("--indices", type=int, nargs="+", default=None,
+                    help="explicit global test-list indices to visualise (overrides --n/--skip)")
+    ap.add_argument("--out", default="dmg_predictions.png",
+                    help="output filename written under outputs/figs/")
     args = ap.parse_args()
 
     ensure_dirs()
@@ -64,10 +69,14 @@ def main():
     print(f"Loaded {args.ckpt} (epoch={ckpt.get('epoch')} val_macro_f1={val_f1:.4f})")
 
     all_test = list_test_pairs()
-    skipped = set(args.skip)
-    selected = [p for i, p in enumerate(all_test) if i not in skipped][: args.n]
-    if skipped:
-        print(f"Skipped test indices: {sorted(skipped)}")
+    if args.indices is not None:
+        selected = [all_test[i] for i in args.indices]
+        print(f"Using explicit indices: {args.indices}")
+    else:
+        skipped = set(args.skip)
+        selected = [p for i, p in enumerate(all_test) if i not in skipped][: args.n]
+        if skipped:
+            print(f"Skipped test indices: {sorted(skipped)}")
     print(f"Inference on {len(selected)} tile pairs from xBD test split")
 
     ds = XBDDataset(selected, stage="dmg", crop=args.crop, train=False, data_root=TEST_ROOT)
@@ -96,11 +105,11 @@ def main():
         axes[i, 3].imshow(pred_rgb); axes[i, 3].set_title("prediction (argmax)", fontsize=9); axes[i, 3].axis("off")
         axes[i, 4].imshow(post_img); axes[i, 4].imshow(pred_rgb, alpha=0.6); axes[i, 4].set_title("prediction on post", fontsize=9); axes[i, 4].axis("off")
 
-    fig.suptitle(f"Stage-2 Siamese U-Net damage predictions — xBD test split "
+    fig.suptitle(f"Stage-2 Siamese U-Net damage predictions, xBD test split "
                  f"(val macro-F1={val_f1:.3f})", fontsize=12)
     add_legend(fig)
     fig.tight_layout()
-    out = FIGS / "dmg_predictions.png"
+    out = FIGS / args.out
     fig.savefig(out, dpi=130, bbox_inches="tight")
     print(f"Wrote {out}")
 

@@ -49,8 +49,12 @@ def per_class_f1_from_cm(cm):
     return f1s
 
 
-def plot_confusion(cm, val_f1, out):
+def plot_confusion(cm, val_f1, out, per_class_f1=None):
     labels = DAMAGE_NAMES[1:]
+    if per_class_f1 is not None:
+        y_labels = [f"{n}\n(F1 = {f:.2f})" for n, f in zip(labels, per_class_f1)]
+    else:
+        y_labels = labels
     cm_sub = cm[1:, 1:].astype(float)
     row_sums = cm_sub.sum(axis=1, keepdims=True)
     cm_norm = cm_sub / (row_sums + EPS)
@@ -58,7 +62,7 @@ def plot_confusion(cm, val_f1, out):
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(cm_norm, vmin=0, vmax=1, cmap="Blues")
     ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=10)
-    ax.set_yticks(range(len(labels))); ax.set_yticklabels(labels, fontsize=10)
+    ax.set_yticks(range(len(labels))); ax.set_yticklabels(y_labels, fontsize=9)
     ax.set_xlabel("Predicted", fontsize=11)
     ax.set_ylabel("True", fontsize=11)
     ax.set_title(
@@ -113,7 +117,7 @@ def main():
         print(f"  {name:15s}: {f1:.4f}")
     print(f"  {'macro':15s}: {macro_f1:.4f}")
 
-    plot_confusion(cm, macro_f1, FIGS / "dmg_confusion.png")
+    plot_confusion(cm, macro_f1, FIGS / "dmg_confusion.png", per_class_f1=f1s)
 
     results = {
         "ckpt": args.ckpt,
